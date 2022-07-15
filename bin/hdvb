@@ -1,0 +1,126 @@
+#!/bin/sh -e
+#L:
+#L:  MIT License
+#L:  
+#l:  Bug reports, feature requests to gemini|https://harkadev.com/oss
+#l:  Copyright (c) 2022 Harkaitz Agirre, harkaitz.aguirre@gmail.com
+#L:
+#L:  Permission is hereby granted, free of charge, to any person obtaining
+#L:  a copy of this software and associated documentation files (the
+#L:  "Software"), to deal in the Software without restriction, including
+#L:  without limitation the rights to use, copy, modify, merge, publish,
+#L:  distribute, sublicense, and/or sell copies of the Software, and to
+#L:  permit persons to whom the Software is furnished to do so, subject to
+#L:  the following conditions:
+#L:
+#L:  The above copyright notice and this permission notice shall be
+#L:  included in all copies or substantial portions of the Software.
+#L:
+#L:  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+#L:  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+#L:  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+#L:  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+#L:  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+#L:  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+#L:  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+##:
+#h: Usage: $0 ...
+#h:
+#h: DVB digital television dongle manager.
+#h:
+#h: Tested with:
+#h:
+#h: - ENERGY SISTEM - Zolid Mini DVB-T Stick.
+#h:
+#h: Subcommands:
+#h:
+#h: ... show          : Show configuration.
+#h: ... install       : Install "Linux dvb firmware" and "w_scan". [Void Linux]
+#h: ... firmware-chk  : Check "/dev/dvb/adapter0" exists.
+#h: ... scan-channels : Scan channels.
+#h: ... channels      : List available channels.
+#h: ... dmenu         : List channels with dmenu and play.
+. hlog
+. hpkg
+. vrun
+. hmain
+hdvb() {
+    local cmd="$1"
+    shift
+    case "${cmd}" in
+        show)          hdvb_show_variables ;;
+        install)       hdvb_install        ;;
+        firmware-chk)  hdvb_firmware_chk   ;;
+        scan-channels) hdvb_scan_channels  ;;
+        channels)      hdvb_channels       ;;
+        dmenu)         hdvb_dmenu          ;;
+        *)             hlog fatal "Invalid subcommand: ${cmd}" ;;
+    esac
+}
+hdvb_show_variables() {
+    printf 'HDVB_COUNTRY          : %s\n'         "${HDVB_COUNTRY}"
+    printf 'HDVB_CHARSET          : %s\n'         "${HDVB_CHARSET}"
+    printf 'HDVB_CHANNELS_MPLAYER : %s (fixed)\n' "${HDVB_CHANNELS_MPLAYER}"
+    printf 'HDVB_CHANNELS_MPV     : %s (fixed)\n' "${HDVB_CHANNELS_MPV}"
+    printf 'HDVB_PLAYER           : %s\n'         "${HDVB_PLAYER}"
+    printf 'HDVB_TERMINAL         : %s\n'         "${HDVB_TERMINAL}"
+}
+hdvb_calc_variables() {
+    HDVB_COUNTRY="${HDVB_COUNTRY:-ES}"
+    HDVB_CHARSET="${HDVB_CHARSET:-UTF-8}"
+    HDVB_CHANNELS_MPLAYER="${HOME}/.mplayer/channels.conf"
+    HDVB_CHANNELS_MPV="${HOME}/.config/mpv/channels.conf"
+    HDVB_PLAYER="${HDVB_PLAYER:-mpv}"
+    HDVB_TERMINAL="${HDVB_TERMINAL:-`which st xterm 2>/dev/null | head -n 1`}"
+}
+
+## -----------------------------------------------------------------------------
+hdvb_install() {
+    hpkg -vi                                  \
+         -w "/usr/lib/firmware/xc4000-1.4.fw" \
+         -w "w_scan"                          \
+         %xbps "linux-firmware-dvb" "w_scan"
+}
+hdvb_firmware_chk() {
+    if test ! -e /dev/dvb/adapter0;then
+        hlog error "Path '/dev/dvb/adapter0' does not exist."
+        hlog error "The dongle was not detected or it is not connected."
+        return 1
+    fi
+}
+hdvb_scan_channels() {
+    hdvb_firmware_chk
+    mkdir -p "`dirname "${HDVB_CHANNELS_MPLAYER}"`"
+    mkdir -p "`dirname "${HDVB_CHANNELS_MPV}"`"
+    vrun w_scan               \
+         -ft                  \
+         -c "${HDVB_COUNTRY}" \
+         -C "${HDVB_CHARSET}" \
+         -E 0 -O 0            \
+         -M                   \
+        | tee "${HDVB_CHANNELS_MPLAYER}" \
+        > "${HDVB_CHANNELS_MPV}"
+}
+hdvb_channels() {
+    if test -f "${HDVB_CHANNELS_MPV}";then
+        sed 's|:.*||' "${HDVB_CHANNELS_MPV}"
+    fi
+}
+hdvb_dmenu() {
+    local channels="`hdvb_channels`"
+    if test ! -n "${channels}";then
+        dmenu -p "No channels." </dev/null
+        return 1
+    elif ! hdvb_firmware_chk;then
+        dmenu -p "Device not attached." </dev/null
+        return 1
+    fi
+    local sel="`printf '%s\n' "${channels}" | dmenu -l 10 -p 'Select channel:'`"
+    if test -n "${sel}";then
+        ${HDVB_TERMINAL:-xterm} -e ${HDVB_PLAYER} "dvb://${sel}"
+    fi
+}
+
+## -----------------------------------------------------------------------------
+hdvb_calc_variables
+hmain -f "hdvb" hdvb "$@"
